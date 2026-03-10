@@ -97,9 +97,6 @@
     {:else}
       <div class="state empty">
         <div class="icon-wrap">
-          <span class="icon icon-video">
-            <Video size={40} strokeWidth={1.5} />
-          </span>
           <span class="icon icon-upload">
             <Upload size={28} strokeWidth={2} />
           </span>
