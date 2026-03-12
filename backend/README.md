@@ -1,5 +1,24 @@
 # Backend
 
+Rust/Axum API. Upload endpoint: `POST /api/upload` (multipart form field `file`), streamed to S3 bucket via multipart upload.
+
+## Environment variables
+
+- **AWS_ACCESS_KEY_ID**, **AWS_SECRET_ACCESS_KEY** – AWS credentials
+- **AWS_DEFAULT_REGION** – e.g. `eu-west-3`
+- **S3_RAW_BUCKET** – bucket name (default: `streamvault-raw`)
+- **ADMIN_TOKEN** – Bearer token required for `/api/upload`
+
+## Run
+
+```bash
+cd backend && cargo run
+```
+
+Server listens on `http://0.0.0.0:3000`. Use the frontend dev server (with proxy `/api` → backend) to upload.
+
+---
+
 ## AWS CLI setup
 
 The bucket script requires the [AWS CLI](https://aws.amazon.com/cli/). Install it with one of these:

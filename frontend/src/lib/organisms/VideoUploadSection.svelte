@@ -7,10 +7,17 @@
     isWithinSizeLimit
   } from '$lib/constants/video';
 
+  /** Set VITE_ADMIN_TOKEN in .env (must match backend ADMIN_TOKEN) */
+  const ADMIN_TOKEN = import.meta.env.VITE_ADMIN_TOKEN ?? '';
+
   let errorMessage = $state<string>('');
   let selectedFile = $state<File | null>(null);
   let isDragging = $state(false);
   let inputId = $state('video-upload-input');
+  let uploading = $state(false);
+  let uploadProgress = $state(0);
+  let successId = $state<string | null>(null);
+  let successKey = $state<string | null>(null);
 
   const MAX_SIZE_GB = 1;
   const acceptTypes = 'video/*';
@@ -18,6 +25,8 @@
   function validateAndSetFile(file: File | null): void {
     errorMessage = '';
     selectedFile = null;
+    successId = null;
+    successKey = null;
     if (!file) return;
 
     if (!isVideoMimeType(file.type)) {
@@ -60,6 +69,85 @@
 
   function openFilePicker() {
     document.getElementById(inputId)?.click();
+  }
+
+  function submitUpload() {
+    const file = selectedFile;
+    if (!file || uploading) return;
+
+    if (!ADMIN_TOKEN) {
+      errorMessage =
+        'Upload token not set. Add VITE_ADMIN_TOKEN to frontend .env (same value as backend ADMIN_TOKEN), then restart the dev server.';
+      return;
+    }
+
+    errorMessage = '';
+    successId = null;
+    successKey = null;
+    uploading = true;
+    uploadProgress = 0;
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const xhr = new XMLHttpRequest();
+
+    xhr.upload.addEventListener('progress', (e) => {
+      if (e.lengthComputable) {
+        uploadProgress = Math.round((e.loaded / e.total) * 100);
+      }
+    });
+
+    xhr.addEventListener('load', () => {
+      uploading = false;
+      uploadProgress = 0;
+      if (xhr.status === 201) {
+        try {
+          const json = JSON.parse(xhr.responseText) as { id: string; key: string };
+          successId = json.id;
+          successKey = json.key;
+        } catch {
+          errorMessage = 'Invalid response from server.';
+        }
+      } else if (xhr.status === 401) {
+        errorMessage =
+          'Unauthorized. Set VITE_ADMIN_TOKEN in frontend .env to match backend ADMIN_TOKEN, then restart the dev server.';
+      } else if (xhr.status === 500) {
+        try {
+          const json = JSON.parse(xhr.responseText) as { error?: string };
+          const msg = json.error ?? 'Server error.';
+          errorMessage =
+            msg.includes('auth not configured') || msg.includes('Server auth')
+              ? 'Server auth not configured. Add ADMIN_TOKEN to backend/.env and start the backend from the backend/ directory (e.g. cd backend && cargo run).'
+              : `Upload failed (500): ${msg}`;
+        } catch {
+          errorMessage =
+            'Server error (500). Ensure backend has ADMIN_TOKEN in backend/.env and was started from backend/ (cd backend && cargo run).';
+        }
+      } else {
+        try {
+          const json = JSON.parse(xhr.responseText) as { error?: string };
+          errorMessage = json.error ?? `Upload failed (${xhr.status}).`;
+        } catch {
+          errorMessage = `Upload failed (${xhr.status}).`;
+        }
+      }
+    });
+
+    xhr.addEventListener('error', () => {
+      uploading = false;
+      uploadProgress = 0;
+      errorMessage = 'Network error. Is the backend running?';
+    });
+
+    xhr.addEventListener('abort', () => {
+      uploading = false;
+      uploadProgress = 0;
+    });
+
+    xhr.open('POST', '/api/upload');
+    xhr.setRequestHeader('Authorization', `Bearer ${ADMIN_TOKEN}`);
+    xhr.send(formData);
   }
 </script>
 
@@ -116,6 +204,37 @@
       </div>
     {/if}
   </div>
+
+  {#if selectedFile && !uploading}
+    <button
+      type="button"
+      onclick={submitUpload}
+      class="rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 dark:focus:ring-offset-[#0f0f0f]"
+    >
+      Upload
+    </button>
+  {/if}
+
+  {#if uploading}
+    <div class="flex flex-col gap-2" role="status" aria-live="polite">
+      <p class="text-[0.9375rem] text-black/70 dark:text-white/70">Uploading… {uploadProgress}%</p>
+      <div class="h-2 w-full overflow-hidden rounded-full bg-black/10 dark:bg-white/10">
+        <div
+          class="h-full rounded-full bg-indigo-500 transition-[width] duration-200"
+          style="width: {uploadProgress}%"
+        ></div>
+      </div>
+    </div>
+  {/if}
+
+  {#if successId}
+    <p class="text-[0.9375rem] text-green-700 dark:text-green-400">
+      Uploaded. Video ID: <code class="rounded bg-black/10 px-1.5 py-0.5 dark:bg-white/10">{successId}</code>
+      {#if successKey}
+        <span class="text-black/55 dark:text-white/55">(key: {successKey})</span>
+      {/if}
+    </p>
+  {/if}
 
   <div id="upload-error" aria-live="polite">
     <ErrorMessage message={errorMessage} />

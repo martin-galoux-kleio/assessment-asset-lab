@@ -1,0 +1,6 @@
+# AI / tooling
+.claude
+
+# pnpm
+.pnpm-store
+.pnpm-store*
