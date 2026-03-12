@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Upload, Video, FileCheck } from '@lucide/svelte';
+  import { Upload, FileCheck } from '@lucide/svelte';
   import ErrorMessage from '$lib/atoms/ErrorMessage.svelte';
   import {
     MAX_VIDEO_SIZE_BYTES,
@@ -63,11 +63,13 @@
   }
 </script>
 
-<div class="upload-section">
+<div class="flex w-full max-w-[36rem] flex-col gap-4">
   <div
-    class="drop-zone"
-    class:dragging={isDragging}
-    class:has-file={!!selectedFile}
+    class="relative flex min-h-[14rem] cursor-pointer items-center justify-center overflow-hidden rounded-2xl border-2 border-dashed py-8 transition-[border-color,background,box-shadow,transform] duration-200 {selectedFile
+      ? 'border-solid border-green-500/40 bg-gradient-to-br from-emerald-950/95 to-emerald-900/98 hover:border-green-500/60 dark:border-green-500/40 dark:from-[#14231c] dark:to-[#0f1c16] dark:hover:border-green-500/60'
+      : isDragging
+        ? 'scale-[1.01] border-indigo-500 bg-gradient-to-br from-indigo-100 to-indigo-50 shadow-[0_0_0_3px_rgba(100,108,255,0.2)] dark:from-[#3c3c50] dark:to-[#2d2d41]'
+        : 'border-black/12 bg-gradient-to-br from-[#fafafa] to-[#f0f0f0] shadow-[0_4px_6px_-1px_rgba(0,0,0,0.06),0_10px_20px_-10px_rgba(0,0,0,0.08),inset_0_1px_0_rgba(255,255,255,0.8)] hover:border-indigo-500/40 hover:from-[#f5f5f5] hover:to-[#ebebeb] dark:border-white/20 dark:from-[#1e1e23] dark:to-[#16161a] dark:shadow-[0_4px_6px_-1px_rgba(0,0,0,0.3),0_10px_20px_-10px_rgba(0,0,0,0.4),inset_0_1px_0_rgba(255,255,255,0.04)] dark:hover:border-indigo-500/50 dark:hover:from-[#23232a] dark:hover:to-[#1a1a20] dark:hover:shadow-[0_8px_16px_-4px_rgba(0,0,0,0.35),0_20px_40px_-15px_rgba(0,0,0,0.45),inset_0_1px_0_rgba(255,255,255,0.06)]'}"
     role="button"
     tabindex="0"
     onclick={openFilePicker}
@@ -82,239 +84,40 @@
       type="file"
       accept={acceptTypes}
       onchange={handleChange}
-      class="input"
+      class="pointer-events-none absolute h-[0.1px] w-[0.1px] opacity-0"
       aria-hidden="true"
       tabindex="-1"
     />
     {#if selectedFile}
-      <div class="state has-file">
-        <span class="icon icon-success">
+      <div class="flex flex-col items-center justify-center gap-3 p-8 text-center">
+        <span class="inline-flex text-green-600 dark:text-green-500">
           <FileCheck size={48} strokeWidth={1.5} />
         </span>
-        <span class="filename">{selectedFile.name}</span>
-        <span class="filesize">{(selectedFile.size / 1024 / 1024).toFixed(2)} MB</span>
+        <span class="max-w-full truncate text-[0.9375rem] font-medium text-[#1a1a1a] dark:text-white/95">
+          {selectedFile.name}
+        </span>
+        <span class="text-[0.8125rem] text-green-700 dark:text-green-400">
+          {(selectedFile.size / 1024 / 1024).toFixed(2)} MB
+        </span>
       </div>
     {:else}
-      <div class="state empty">
-        <div class="icon-wrap">
-          <span class="icon icon-upload">
+      <div class="flex flex-col items-center justify-center gap-3 p-8 text-center">
+        <div class="flex items-center justify-center gap-5">
+          <span class="inline-flex text-indigo-600 transition-colors hover:text-indigo-400 dark:text-indigo-500 dark:hover:text-indigo-400">
             <Upload size={28} strokeWidth={2} />
           </span>
         </div>
-        <span class="prompt">Drop your video here or click to browse</span>
-        <span class="hint">MP4, WebM, MOV — max 1 GB</span>
+        <span class="text-base font-medium text-[#1a1a1a] dark:text-white/90">
+          Drop your video here or click to browse
+        </span>
+        <span class="text-[0.8125rem] text-black/45 dark:text-white/45">
+          MP4, WebM, MOV — max 1 GB
+        </span>
       </div>
     {/if}
   </div>
+
   <div id="upload-error" aria-live="polite">
     <ErrorMessage message={errorMessage} />
   </div>
 </div>
-
-<style>
-  .upload-section {
-    display: flex;
-    flex-direction: column;
-    align-items: stretch;
-    gap: 1rem;
-    width: 100%;
-    max-width: 36rem;
-  }
-
-  .drop-zone {
-    position: relative;
-    min-height: 14rem;
-    border-radius: 16px;
-    border: 2px dashed rgba(255, 255, 255, 0.2);
-    background: linear-gradient(145deg, rgba(30, 30, 35, 0.95) 0%, rgba(22, 22, 26, 0.98) 100%);
-    box-shadow:
-      0 4px 6px -1px rgba(0, 0, 0, 0.3),
-      0 10px 20px -10px rgba(0, 0, 0, 0.4),
-      inset 0 1px 0 rgba(255, 255, 255, 0.04);
-    cursor: pointer;
-    transition:
-      border-color 0.2s,
-      background 0.2s,
-      box-shadow 0.2s,
-      transform 0.15s;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    overflow: hidden;
-  }
-
-  .drop-zone:hover {
-    border-color: rgba(100, 108, 255, 0.5);
-    background: linear-gradient(145deg, rgba(35, 35, 42, 0.98) 0%, rgba(26, 26, 32, 0.99) 100%);
-    box-shadow:
-      0 8px 16px -4px rgba(0, 0, 0, 0.35),
-      0 20px 40px -15px rgba(0, 0, 0, 0.45),
-      inset 0 1px 0 rgba(255, 255, 255, 0.06);
-  }
-
-  .drop-zone.dragging {
-    border-color: #646cff;
-    background: linear-gradient(145deg, rgba(60, 60, 80, 0.98) 0%, rgba(45, 45, 65, 0.99) 100%);
-    box-shadow:
-      0 0 0 3px rgba(100, 108, 255, 0.2),
-      0 12px 24px -8px rgba(0, 0, 0, 0.4);
-    transform: scale(1.01);
-  }
-
-  .drop-zone.has-file {
-    border-style: solid;
-    border-color: rgba(34, 197, 94, 0.4);
-    background: linear-gradient(145deg, rgba(20, 35, 28, 0.95) 0%, rgba(15, 28, 22, 0.98) 100%);
-  }
-
-  .drop-zone.has-file:hover {
-    border-color: rgba(34, 197, 94, 0.6);
-  }
-
-  .input {
-    position: absolute;
-    width: 0.1px;
-    height: 0.1px;
-    opacity: 0;
-    pointer-events: none;
-  }
-
-  .state {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 0.75rem;
-    padding: 2rem;
-    text-align: center;
-  }
-
-  .icon-wrap {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 1.25rem;
-  }
-
-  .icon {
-    display: inline-flex;
-    transition: color 0.2s;
-  }
-  .icon :global(svg) {
-    color: inherit;
-  }
-
-  .icon-video {
-    color: rgba(255, 255, 255, 0.5);
-  }
-
-  .icon-upload {
-    color: #646cff;
-  }
-
-  .drop-zone:hover .icon-video {
-    color: rgba(100, 108, 255, 0.8);
-  }
-
-  .drop-zone:hover .icon-upload {
-    color: #818cf8;
-  }
-
-  .icon-success {
-    color: #22c55e;
-  }
-
-  .prompt {
-    font-size: 1rem;
-    font-weight: 500;
-    color: rgba(255, 255, 255, 0.9);
-  }
-
-  .hint {
-    font-size: 0.8125rem;
-    color: rgba(255, 255, 255, 0.45);
-  }
-
-  .filename {
-    font-size: 0.9375rem;
-    font-weight: 500;
-    color: rgba(255, 255, 255, 0.95);
-    max-width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .filesize {
-    font-size: 0.8125rem;
-    color: rgba(34, 197, 94, 0.9);
-  }
-
-  :global([data-theme='light']) .drop-zone,
-  :global(.light) .drop-zone {
-    border-color: rgba(0, 0, 0, 0.12);
-    background: linear-gradient(145deg, #fafafa 0%, #f0f0f0 100%);
-    box-shadow:
-      0 4px 6px -1px rgba(0, 0, 0, 0.06),
-      0 10px 20px -10px rgba(0, 0, 0, 0.08),
-      inset 0 1px 0 rgba(255, 255, 255, 0.8);
-  }
-
-  :global([data-theme='light']) .drop-zone:hover,
-  :global(.light) .drop-zone:hover {
-    border-color: rgba(100, 108, 255, 0.4);
-    background: linear-gradient(145deg, #f5f5f5 0%, #ebebeb 100%);
-  }
-
-  :global([data-theme='light']) .drop-zone.dragging,
-  :global(.light) .drop-zone.dragging {
-    border-color: #646cff;
-    background: linear-gradient(145deg, #eef 0%, #e8e8f5 100%);
-  }
-
-  :global([data-theme='light']) .icon-video,
-  :global(.light) .icon-video {
-    color: rgba(0, 0, 0, 0.4);
-  }
-
-  :global([data-theme='light']) .icon-upload,
-  :global(.light) .icon-upload {
-    color: #6366f1;
-  }
-
-  :global([data-theme='light']) .drop-zone:hover .icon-video,
-  :global(.light) .drop-zone:hover .icon-video {
-    color: rgba(100, 108, 255, 0.7);
-  }
-
-  :global([data-theme='light']) .drop-zone:hover .icon-upload,
-  :global(.light) .drop-zone:hover .icon-upload {
-    color: #4f46e5;
-  }
-
-  :global([data-theme='light']) .icon-success,
-  :global(.light) .icon-success {
-    color: #16a34a;
-  }
-
-  :global([data-theme='light']) .prompt,
-  :global(.light) .prompt {
-    color: #1a1a1a;
-  }
-
-  :global([data-theme='light']) .hint,
-  :global(.light) .hint {
-    color: rgba(0, 0, 0, 0.45);
-  }
-
-  :global([data-theme='light']) .drop-zone.has-file,
-  :global(.light) .drop-zone.has-file {
-    border-color: rgba(34, 197, 94, 0.5);
-    background: linear-gradient(145deg, #f0fdf4 0%, #dcfce7 100%);
-  }
-
-  :global([data-theme='light']) .filesize,
-  :global(.light) .filesize {
-    color: #16a34a;
-  }
-</style>
