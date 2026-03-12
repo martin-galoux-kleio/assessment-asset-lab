@@ -1,6 +1,6 @@
 use axum::{
     middleware,
-    routing::post,
+    routing::{get, post},
     Router,
 };
 use axum::extract::DefaultBodyLimit;
@@ -11,7 +11,7 @@ mod error;
 mod handlers;
 mod state;
 
-use handlers::upload;
+use handlers::{upload, video_url};
 use state::AppState;
 
 /// Max upload body size: 1 GB (for multipart/form-data).
@@ -45,10 +45,14 @@ async fn main() {
         bucket,
     };
 
-    let app = Router::new()
+    let protected = Router::new()
         .route("/api/upload", post(upload))
         .route_layer(middleware::from_fn(auth::require_admin_bearer))
-        .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
+        .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES));
+
+    let app = Router::new()
+        .route("/api/video/:id", get(video_url))
+        .merge(protected)
         .with_state(state);
 
     let listen = std::net::SocketAddr::from(([0, 0, 0, 0], 3000));
