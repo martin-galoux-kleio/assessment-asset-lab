@@ -1,12 +1,24 @@
 # Backend
 
-Rust/Axum API. Upload endpoint: `POST /api/upload` (multipart form field `file`), streamed to S3 bucket via multipart upload.
+Rust/Axum API. Video uploads and playback use a **single S3 bucket** (for now).
+
+## API
+
+- **POST `/api/upload`** — Upload a video to S3.  
+  Multipart form field `file`. Streamed to S3 via multipart upload (no full buffering; supports files up to 1 GB).  
+  Protected by Bearer token (`ADMIN_TOKEN`).  
+  Returns the generated video **ID** (and key); use it to watch the video.
+
+- **GET `/api/video/:id`** — Fetch a video by ID.  
+  Returns a short-lived presigned S3 URL so the client can play the file. No auth required for this endpoint.
+
+All video objects are stored in one bucket under keys like `uploads/<id>.orig`.
 
 ## Environment variables
 
 - **AWS_ACCESS_KEY_ID**, **AWS_SECRET_ACCESS_KEY** – AWS credentials
 - **AWS_DEFAULT_REGION** – e.g. `eu-west-3`
-- **S3_RAW_BUCKET** – bucket name (default: `streamvault-raw`)
+- **S3_RAW_BUCKET** – single S3 bucket name for uploads and video URLs (required)
 - **ADMIN_TOKEN** – Bearer token required for `/api/upload`
 
 ## Run
