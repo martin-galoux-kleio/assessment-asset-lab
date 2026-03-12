@@ -26,6 +26,10 @@ npm run dev
 
 Use the dev server with the Vite proxy so `/api` requests go to the backend (see `vite.config.ts`).
 
+## Hosting
+
+The frontend is deployed on [Vercel](https://vercel.com) (root directory: `frontend`, Vite build). See [DEPLOY_VERCEL.md](../DEPLOY_VERCEL.md) in the repo root for step-by-step deployment and how to point `/api` at the backend.
+
 ## IDE
 
 [VS Code](https://code.visualstudio.com/) + [Svelte](https://marketplace.visualstudio.com/items?itemName=svelte.svelte-vscode) is recommended.
