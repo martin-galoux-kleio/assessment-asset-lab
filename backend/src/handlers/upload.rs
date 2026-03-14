@@ -35,7 +35,7 @@ pub async fn upload(
         let upload_id = state
             .s3
             .create_multipart_upload()
-            .bucket(state.bucket())
+            .bucket(state.raw_bucket())
             .key(&key)
             .send()
             .await
@@ -58,7 +58,7 @@ pub async fn upload(
                 let upload_part_res = state
                     .s3
                     .upload_part()
-                    .bucket(state.bucket())
+                    .bucket(state.raw_bucket())
                     .key(&key)
                     .upload_id(&upload_id)
                     .part_number(part_number)
@@ -84,7 +84,7 @@ pub async fn upload(
             let upload_part_res = state
                 .s3
                 .upload_part()
-                .bucket(state.bucket())
+                .bucket(state.raw_bucket())
                 .key(&key)
                 .upload_id(&upload_id)
                 .part_number(part_number)
@@ -106,7 +106,7 @@ pub async fn upload(
         state
             .s3
             .complete_multipart_upload()
-            .bucket(state.bucket())
+            .bucket(state.raw_bucket())
             .key(&key)
             .upload_id(&upload_id)
             .multipart_upload(
@@ -114,6 +114,30 @@ pub async fn upload(
                     .set_parts(Some(completed_parts))
                     .build(),
             )
+            .send()
+            .await
+            .map_err(|e| AppError::S3(e.to_string()))?;
+
+        // Write an empty queue marker to raw_bucket so the worker picks up the job.
+        state
+            .s3
+            .put_object()
+            .bucket(state.raw_bucket())
+            .key(format!("queue/{}", id))
+            .body(ByteStream::from(vec![]))
+            .send()
+            .await
+            .map_err(|e| AppError::S3(e.to_string()))?;
+
+        // Write initial status to video_bucket so the API can report "pending".
+        let status_body = serde_json::json!({ "status": "pending" }).to_string();
+        state
+            .s3
+            .put_object()
+            .bucket(state.video_bucket())
+            .key(format!("videos/{}/status.json", id))
+            .content_type("application/json")
+            .body(ByteStream::from(status_body.into_bytes()))
             .send()
             .await
             .map_err(|e| AppError::S3(e.to_string()))?;

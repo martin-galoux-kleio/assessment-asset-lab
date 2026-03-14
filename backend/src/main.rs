@@ -13,7 +13,7 @@ mod error;
 mod handlers;
 mod state;
 
-use handlers::{upload, video_url};
+use handlers::{upload, video_url, video_status, video_quality_url};
 use state::AppState;
 
 /// Max upload body size: 1 GB (for multipart/form-data).
@@ -58,12 +58,15 @@ async fn main() {
         .load()
         .await;
     let s3_client = aws_sdk_s3::Client::new(&aws_config);
-    let bucket = std::env::var("S3_RAW_BUCKET")
+    let raw_bucket = std::env::var("S3_RAW_BUCKET")
         .expect("S3_RAW_BUCKET env var must be set");
+    let video_bucket = std::env::var("S3_VIDEO_BUCKET")
+        .expect("S3_VIDEO_BUCKET env var must be set");
 
     let state = AppState {
         s3: s3_client,
-        bucket,
+        raw_bucket,
+        video_bucket,
     };
 
     let protected = Router::new()
@@ -72,6 +75,10 @@ async fn main() {
         .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES));
 
     let app = Router::new()
+        // Static segment "/status" must be defined before "/:quality" so Axum
+        // matches the literal before the wildcard param.
+        .route("/api/video/:id/status", get(video_status))
+        .route("/api/video/:id/:quality", get(video_quality_url))
         .route("/api/video/:id", get(video_url))
         .merge(protected)
         .layer(cors_layer())
