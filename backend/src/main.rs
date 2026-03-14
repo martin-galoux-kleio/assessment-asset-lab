@@ -1,10 +1,12 @@
 use axum::{
+    extract::DefaultBodyLimit,
+    http::{header::ACCEPT, header::AUTHORIZATION, header::CONTENT_TYPE, HeaderValue, Method},
     middleware,
     routing::{get, post},
     Router,
 };
-use axum::extract::DefaultBodyLimit;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use tower_http::cors::{Any, CorsLayer};
 
 mod auth;
 mod error;
@@ -16,6 +18,25 @@ use state::AppState;
 
 /// Max upload body size: 1 GB (for multipart/form-data).
 const MAX_UPLOAD_BYTES: usize = 1024 * 1024 * 1024;
+
+fn cors_layer() -> CorsLayer {
+    let origins = std::env::var("CORS_ORIGINS")
+        .ok()
+        .map(|s| {
+            s.split(',')
+                .map(|o| o.trim())
+                .filter(|o| !o.is_empty())
+                .filter_map(|o| o.parse::<HeaderValue>().ok())
+                .collect::<Vec<_>>()
+        });
+    let layer = CorsLayer::new()
+        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_headers([AUTHORIZATION, CONTENT_TYPE, ACCEPT]);
+    match origins {
+        Some(ref o) if !o.is_empty() => layer.allow_origin(o.clone()),
+        _ => layer.allow_origin(Any),
+    }
+}
 
 #[tokio::main]
 async fn main() {
@@ -53,6 +74,7 @@ async fn main() {
     let app = Router::new()
         .route("/api/video/:id", get(video_url))
         .merge(protected)
+        .layer(cors_layer())
         .with_state(state);
 
     let port: u16 = std::env::var("PORT")

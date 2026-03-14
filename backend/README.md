@@ -20,6 +20,7 @@ All video objects are stored in one bucket under keys like `uploads/<id>.orig`.
 - **AWS_DEFAULT_REGION** – e.g. `eu-west-3`
 - **S3_RAW_BUCKET** – single S3 bucket name for uploads and video URLs (required)
 - **ADMIN_TOKEN** – Bearer token required for `/api/upload`
+- **CORS_ORIGINS** – (optional) Comma-separated list of allowed origins for CORS (e.g. `https://streamvault-ui.vercel.app`). If unset, all origins are allowed.
 
 ## Run
 
