@@ -1,6 +1,6 @@
 # Build stage
-# Rust 1.85+ required for deps using edition 2024 (e.g. time-core)
-FROM rust:1.85.0-bookworm AS builder
+# Rust 1.91+ required for aws-sdk-* and time crates
+FROM rust:1.91-bookworm AS builder
 WORKDIR /app
 
 COPY Cargo.toml Cargo.lock* ./
