@@ -55,7 +55,11 @@ async fn main() {
         .merge(protected)
         .with_state(state);
 
-    let listen = std::net::SocketAddr::from(([0, 0, 0, 0], 3000));
+    let port: u16 = std::env::var("PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(3000);
+    let listen = std::net::SocketAddr::from(([0, 0, 0, 0], port));
     tracing::info!("listening on {}", listen);
     let listener = tokio::net::TcpListener::bind(listen).await.expect("bind");
     axum::serve(listener, app).await.expect("serve");
