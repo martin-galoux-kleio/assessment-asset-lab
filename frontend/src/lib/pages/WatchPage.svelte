@@ -1,6 +1,8 @@
 <script lang="ts">
   import { Film } from '@lucide/svelte';
   import { onMount } from 'svelte';
+  import { apiPath } from '$lib/constants/api';
+  import { navigate } from '$lib/router';
 
   let { id }: { id: string } = $props();
 
@@ -9,7 +11,7 @@
 
   onMount(async () => {
     try {
-      const res = await fetch(`/api/video/${encodeURIComponent(id)}`);
+      const res = await fetch(apiPath(`/api/video/${encodeURIComponent(id)}`));
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error ?? `HTTP ${res.status}`);
@@ -24,10 +26,19 @@
 
 <main class="mx-auto max-w-[56rem] px-6 py-10 text-left">
   <header class="mb-8">
-    <div
-      class="mb-5 inline-flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500/20 to-indigo-500/10 text-indigo-400"
-    >
-      <Film size={28} strokeWidth={1.75} aria-hidden="true" />
+    <div class="mb-5 flex items-center justify-between">
+      <div
+        class="inline-flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500/20 to-indigo-500/10 text-indigo-400"
+      >
+        <Film size={28} strokeWidth={1.75} aria-hidden="true" />
+      </div>
+      <button
+        type="button"
+        onclick={() => navigate('/upload')}
+        class="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 dark:focus:ring-offset-[#0f0f0f]"
+      >
+        Upload new video
+      </button>
     </div>
     <h1 class="text-[1.75rem] font-semibold tracking-tight text-[#1a1a1a] dark:text-white/95">
       Watch — {id}
