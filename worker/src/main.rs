@@ -150,19 +150,18 @@ async fn process_video(cfg: &Config, id: &str) -> anyhow::Result<()> {
 
         let status = Command::new("ffmpeg")
             .args([
-                "-fflags", "nobuffer",
+                "-threads", "1",        // limit decoder + encoder threads
+                "-filter_threads", "1", // limit filter graph threads
                 "-i",
                 raw_path.to_str().unwrap(),
+                "-map", "0:v:0",        // only video stream (skip Dolby Vision metadata tracks)
+                "-map", "0:a:0?",       // only first audio stream (optional)
+                "-map_metadata", "-1",  // strip all metadata (Dolby Vision RPU etc.)
                 "-c:v", "libx264",
                 "-crf", "23",
                 "-preset", "ultrafast",
-                "-threads", "1",
-                // scale + tonemap 10-bit HDR → 8-bit SDR for browser compatibility
-                "-vf", &format!(
-                    "scale=-2:{},zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p",
-                    height
-                ),
-                "-pix_fmt", "yuv420p",  // force 8-bit output — required for browser playback
+                "-vf", &format!("scale=-2:{}", height),
+                "-pix_fmt", "yuv420p",
                 "-c:a", "aac",
                 "-b:a", "128k",
                 "-bufsize", "512k",
