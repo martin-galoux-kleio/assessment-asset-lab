@@ -62,11 +62,14 @@ async fn main() {
         .expect("S3_RAW_BUCKET env var must be set");
     let video_bucket = std::env::var("S3_VIDEO_BUCKET")
         .expect("S3_VIDEO_BUCKET env var must be set");
+    let cloudfront_domain = std::env::var("CLOUDFRONT_DOMAIN")
+        .expect("CLOUDFRONT_DOMAIN env var must be set");
 
     let state = AppState {
         s3: s3_client,
         raw_bucket,
         video_bucket,
+        cloudfront_domain,
     };
 
     let protected = Router::new()

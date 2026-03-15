@@ -101,27 +101,19 @@ pub async fn video_status(
 }
 
 /// GET /api/video/:id/:quality
-/// Returns a presigned URL for a transcoded rendition (e.g. 360p, 720p, 1080p)
-/// stored in S3_VIDEO_BUCKET under videos/{id}/{quality}.mp4.
+/// Returns a CloudFront URL for a transcoded rendition (e.g. 360p, 720p, 1080p).
+/// No presigning needed — the bucket is private but CloudFront OAC handles access.
+/// UUIDs are unguessable so the URL itself acts as the access token.
 pub async fn video_quality_url(
     State(state): State<AppState>,
     Path((id, quality)): Path<(String, String)>,
 ) -> Result<Json<VideoUrlResponse>, AppError> {
-    let key = format!("videos/{}/{}.mp4", id, quality);
+    let url = format!(
+        "https://{}/videos/{}/{}.mp4",
+        state.cloudfront_domain(),
+        id,
+        quality,
+    );
 
-    let presigning_config = PresigningConfig::expires_in(Duration::from_secs(PRESIGN_TTL_SECS))
-        .map_err(|e| AppError::S3(e.to_string()))?;
-
-    let presigned = state
-        .s3
-        .get_object()
-        .bucket(state.video_bucket())
-        .key(&key)
-        .presigned(presigning_config)
-        .await
-        .map_err(|e| AppError::S3(e.to_string()))?;
-
-    Ok(Json(VideoUrlResponse {
-        url: presigned.uri().to_string(),
-    }))
+    Ok(Json(VideoUrlResponse { url }))
 }
