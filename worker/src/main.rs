@@ -1,27 +1,28 @@
-//! AssetLab transcoding worker.
+//! AssetLab transcoding worker — AWS MediaConvert edition.
 //!
 //! Polls S3_RAW_BUCKET/queue/ every 30 seconds for pending jobs.
-//! For each job:
-//!   1. Claims it by deleting the queue marker.
-//!   2. Downloads the raw file from S3_RAW_BUCKET.
-//!   3. Transcodes to 360p / 720p / 1080p via FFmpeg.
-//!   4. Uploads renditions to S3_VIDEO_BUCKET.
-//!   5. Deletes raw file from S3_RAW_BUCKET.
-//!   6. Writes final status.json to S3_VIDEO_BUCKET.
+//! For each job, submits an AWS MediaConvert job and polls until complete.
+//! No FFmpeg, no local file I/O, no memory issues.
 
+use aws_sdk_mediaconvert::types::{
+    AudioCodec, AudioCodecSettings, AudioDefaultSelection, AudioDescription,
+    AudioSelector, ContainerSettings, ContainerType, FileGroupSettings, H264RateControlMode,
+    H264Settings, H264QvbrSettings, Input, JobSettings, Output, OutputGroup,
+    OutputGroupSettings, OutputGroupType, VideoCodec, VideoCodecSettings, VideoDescription,
+    AacSettings, AacCodingMode,
+};
 use aws_sdk_s3::primitives::ByteStream;
 use serde_json::json;
-use std::path::PathBuf;
-use tokio::io::AsyncWriteExt;
-use tokio::process::Command;
-use tokio::time::{interval, Duration};
+use tokio::time::{interval, sleep, Duration};
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
 struct Config {
     s3: aws_sdk_s3::Client,
+    mediaconvert: aws_sdk_mediaconvert::Client,
     raw_bucket: String,
     video_bucket: String,
+    mediaconvert_role_arn: String,
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -31,11 +32,9 @@ async fn main() {
     dotenvy::dotenv().ok();
 
     tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::new(
-                std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into()),
-            ),
-        )
+        .with_env_filter(tracing_subscriber::EnvFilter::new(
+            std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into()),
+        ))
         .init();
 
     let region = aws_types::region::Region::new(
@@ -46,16 +45,39 @@ async fn main() {
         .load()
         .await;
 
+    // Discover the account-specific MediaConvert endpoint automatically.
+    // This avoids needing a MEDIACONVERT_ENDPOINT env var.
+    let discovery_client = aws_sdk_mediaconvert::Client::new(&aws_config);
+    let mediaconvert_endpoint = discovery_client
+        .describe_endpoints()
+        .send()
+        .await
+        .expect("failed to describe MediaConvert endpoints")
+        .endpoints()
+        .first()
+        .and_then(|e| e.url())
+        .expect("no MediaConvert endpoint returned")
+        .to_string();
+
+    tracing::info!(mediaconvert_endpoint, "discovered MediaConvert endpoint");
+
+    let mc_config = aws_sdk_mediaconvert::config::Builder::from(&aws_config)
+        .endpoint_url(&mediaconvert_endpoint)
+        .build();
+
     let cfg = Config {
         s3: aws_sdk_s3::Client::new(&aws_config),
+        mediaconvert: aws_sdk_mediaconvert::Client::from_conf(mc_config),
         raw_bucket: std::env::var("S3_RAW_BUCKET").expect("S3_RAW_BUCKET must be set"),
         video_bucket: std::env::var("S3_VIDEO_BUCKET").expect("S3_VIDEO_BUCKET must be set"),
+        mediaconvert_role_arn: std::env::var("MEDIACONVERT_ROLE_ARN")
+            .expect("MEDIACONVERT_ROLE_ARN must be set"),
     };
 
     tracing::info!(
         raw_bucket = %cfg.raw_bucket,
         video_bucket = %cfg.video_bucket,
-        "worker started, polling every 30s"
+        "worker started (MediaConvert mode), polling every 30s"
     );
 
     let mut ticker = interval(Duration::from_secs(30));
@@ -97,7 +119,7 @@ async fn poll_and_process(cfg: &Config) -> anyhow::Result<()> {
 
         tracing::info!(id, "picked up job");
 
-        // Claim: delete queue marker first so no other worker instance grabs it.
+        // Claim: delete queue marker so no other instance grabs it.
         cfg.s3
             .delete_object()
             .bucket(&cfg.raw_bucket)
@@ -105,9 +127,8 @@ async fn poll_and_process(cfg: &Config) -> anyhow::Result<()> {
             .send()
             .await?;
 
-        // Process — write error status on failure so the frontend can surface it.
         if let Err(e) = process_video(cfg, &id).await {
-            tracing::error!(id, "transcoding failed: {e}");
+            tracing::error!(id, "job failed: {e}");
             let _ = write_status(cfg, &id, json!({ "status": "error", "error": e.to_string() })).await;
         }
     }
@@ -115,81 +136,178 @@ async fn poll_and_process(cfg: &Config) -> anyhow::Result<()> {
     Ok(())
 }
 
-// ── Transcoding pipeline ──────────────────────────────────────────────────────
+// ── MediaConvert job ──────────────────────────────────────────────────────────
 
 async fn process_video(cfg: &Config, id: &str) -> anyhow::Result<()> {
-    // Mark as processing so the API can report it immediately.
     write_status(cfg, id, json!({ "status": "processing" })).await?;
 
-    // ── 1. Download raw file ──────────────────────────────────────────────────
-    let tmp_dir = std::env::temp_dir();
-    let raw_path = tmp_dir.join(format!("{}.orig", id));
+    let input_s3 = format!("s3://{}/uploads/{}.orig", cfg.raw_bucket, id);
+    let output_prefix = format!("s3://{}/videos/{}/", cfg.video_bucket, id);
 
-    tracing::info!(id, path = %raw_path.display(), "downloading raw file");
-    download_from_s3(cfg, &format!("uploads/{}.orig", id), &raw_path, &cfg.raw_bucket).await?;
+    // ── Build MediaConvert job ────────────────────────────────────────────────
 
-    // ── 2. Probe source height ────────────────────────────────────────────────
-    let source_height = probe_height(&raw_path).await.unwrap_or_else(|e| {
-        tracing::warn!(id, "ffprobe failed ({e}), assuming 720p");
-        720
-    });
-    tracing::info!(id, source_height, "source probed");
+    let input = Input::builder()
+        .file_input(&input_s3)
+        .audio_selectors(
+            "Audio Selector 1",
+            AudioSelector::builder()
+                .default_selection(AudioDefaultSelection::Default)
+                .build(),
+        )
+        .video_selector(aws_sdk_mediaconvert::types::VideoSelector::builder().build())
+        .build();
 
-    // ── 3. Transcode each rendition ───────────────────────────────────────────
-    let target_heights: &[u32] = &[360, 720, 1080];
-    let mut produced: Vec<String> = Vec::new();
-
-    for &height in target_heights {
-        if height > source_height {
-            tracing::info!(id, height, "skipping (exceeds source)");
-            continue;
-        }
-
-        let out_path = tmp_dir.join(format!("{}_{}.mp4", id, height));
-        tracing::info!(id, height, "transcoding");
-
-        let status = Command::new("ffmpeg")
-            .args([
-                "-threads", "1",        // limit decoder + encoder threads
-                "-filter_threads", "1", // limit filter graph threads
-                "-i",
-                raw_path.to_str().unwrap(),
-                "-map", "0:v:0",        // only video stream (skip Dolby Vision metadata tracks)
-                "-map", "0:a:0?",       // only first audio stream (optional)
-                "-map_metadata", "-1",  // strip all metadata (Dolby Vision RPU etc.)
-                "-c:v", "libx264",
-                "-crf", "23",
-                "-preset", "ultrafast",
-                "-vf", &format!("scale=-2:{}", height),
-                "-pix_fmt", "yuv420p",
-                "-c:a", "aac",
-                "-b:a", "128k",
-                "-bufsize", "512k",
-                "-maxrate", "2M",
-                "-movflags", "+faststart",
-                "-y",
-                out_path.to_str().unwrap(),
-            ])
-            .status()
-            .await?;
-
-        if !status.success() {
-            anyhow::bail!("ffmpeg failed for {}p (exit {})", height, status);
-        }
-
-        // Upload rendition to video bucket.
-        let s3_key = format!("videos/{}/{}p.mp4", id, height);
-        tracing::info!(id, height, s3_key, "uploading rendition");
-        upload_to_s3(cfg, &out_path, &s3_key).await?;
-
-        // Clean up local temp file immediately.
-        let _ = tokio::fs::remove_file(&out_path).await;
-
-        produced.push(format!("{}p", height));
+    // Helper: build one H.264 output at a given height and max bitrate (bps).
+    fn make_output(name_modifier: &str, height: i32, max_bitrate: i32) -> Output {
+        Output::builder()
+            .name_modifier(name_modifier)
+            .video_description(
+                VideoDescription::builder()
+                    .height(height)
+                    // FIT_NO_UPSCALE: if source is smaller than target, keep source size.
+                    .scaling_behavior(aws_sdk_mediaconvert::types::ScalingBehavior::FitNoUpscale)
+                    .codec_settings(
+                        VideoCodecSettings::builder()
+                            .codec(VideoCodec::H264)
+                            .h264_settings(
+                                H264Settings::builder()
+                                    .rate_control_mode(H264RateControlMode::Qvbr)
+                                    .qvbr_settings(
+                                        H264QvbrSettings::builder()
+                                            .qvbr_quality_level(7) // ~CRF 23 equivalent
+                                            .build(),
+                                    )
+                                    .max_bitrate(max_bitrate)
+                                    .build(),
+                            )
+                            .build(),
+                    )
+                    .build(),
+            )
+            .audio_descriptions(
+                AudioDescription::builder()
+                    .audio_source_name("Audio Selector 1")
+                    .codec_settings(
+                        AudioCodecSettings::builder()
+                            .codec(AudioCodec::Aac)
+                            .aac_settings(
+                                AacSettings::builder()
+                                    .sample_rate(48000)
+                                    .bitrate(128000_f64)
+                                    .coding_mode(AacCodingMode::CodingMode20)
+                                    .build(),
+                            )
+                            .build(),
+                    )
+                    .build(),
+            )
+            .container_settings(
+                ContainerSettings::builder()
+                    .container(ContainerType::Mp4)
+                    .build(),
+            )
+            .build()
     }
 
-    // ── 4. Clean up raw file ──────────────────────────────────────────────────
-    let _ = tokio::fs::remove_file(&raw_path).await;
+    let output_group = OutputGroup::builder()
+        .output_group_settings(
+            OutputGroupSettings::builder()
+                .r#type(OutputGroupType::FileGroupSettings)
+                .file_group_settings(
+                    FileGroupSettings::builder()
+                        .destination(&output_prefix)
+                        .build(),
+                )
+                .build(),
+        )
+        .outputs(make_output("360p",  360,  1_500_000))
+        .outputs(make_output("720p",  720,  4_000_000))
+        .outputs(make_output("1080p", 1080, 8_000_000))
+        .build();
+
+    let settings = JobSettings::builder()
+        .inputs(input)
+        .output_groups(output_group)
+        .build();
+
+    // ── Submit job ────────────────────────────────────────────────────────────
+
+    let job_id = cfg
+        .mediaconvert
+        .create_job()
+        .role(&cfg.mediaconvert_role_arn)
+        .settings(settings)
+        .send()
+        .await?
+        .job()
+        .and_then(|j| j.id())
+        .ok_or_else(|| anyhow::anyhow!("MediaConvert returned no job ID"))?
+        .to_string();
+
+    tracing::info!(id, job_id, "MediaConvert job submitted");
+
+    // ── Poll until complete ───────────────────────────────────────────────────
+
+    loop {
+        sleep(Duration::from_secs(15)).await;
+
+        let job = cfg
+            .mediaconvert
+            .get_job()
+            .id(&job_id)
+            .send()
+            .await?
+            .job()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("job disappeared"))?;
+
+        match job.status() {
+            Some(aws_sdk_mediaconvert::types::JobStatus::Complete) => {
+                tracing::info!(id, job_id, "MediaConvert job complete");
+                break;
+            }
+            Some(aws_sdk_mediaconvert::types::JobStatus::Error) => {
+                let msg = job.error_message().unwrap_or("unknown error");
+                anyhow::bail!("MediaConvert error: {msg}");
+            }
+            Some(status) => {
+                tracing::debug!(id, job_id, ?status, "job in progress");
+            }
+            None => {}
+        }
+    }
+
+    // ── Discover which qualities were actually produced ────────────────────────
+    // List objects under videos/{id}/ to find the mp4 files MediaConvert wrote.
+
+    let listed = cfg
+        .s3
+        .list_objects_v2()
+        .bucket(&cfg.video_bucket)
+        .prefix(format!("videos/{}/", id))
+        .send()
+        .await?;
+
+    let mut qualities: Vec<String> = listed
+        .contents()
+        .iter()
+        .filter_map(|obj| {
+            let key = obj.key()?;
+            let filename = key.split('/').last()?;
+            // MediaConvert produces e.g. "360p.mp4", "720p.mp4", "1080p.mp4"
+            let quality = filename.strip_suffix(".mp4")?;
+            Some(quality.to_owned())
+        })
+        .filter(|q| q != "status")
+        .collect();
+
+    // Sort by ascending resolution for the frontend quality picker.
+    let order = ["360p", "720p", "1080p"];
+    qualities.sort_by_key(|q| order.iter().position(|&o| o == q).unwrap_or(99));
+
+    tracing::info!(id, ?qualities, "renditions available");
+
+    // ── Clean up raw file ─────────────────────────────────────────────────────
 
     cfg.s3
         .delete_object()
@@ -198,10 +316,9 @@ async fn process_video(cfg: &Config, id: &str) -> anyhow::Result<()> {
         .send()
         .await?;
 
-    tracing::info!(id, ?produced, "raw file deleted from S3");
+    // ── Done ──────────────────────────────────────────────────────────────────
 
-    // ── 5. Write done status ──────────────────────────────────────────────────
-    write_status(cfg, id, json!({ "status": "done", "qualities": produced })).await?;
+    write_status(cfg, id, json!({ "status": "done", "qualities": qualities })).await?;
     tracing::info!(id, "job complete");
 
     Ok(())
@@ -209,72 +326,15 @@ async fn process_video(cfg: &Config, id: &str) -> anyhow::Result<()> {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/// Stream an S3 object to a local file.
-async fn download_from_s3(
-    cfg: &Config,
-    key: &str,
-    dest: &PathBuf,
-    bucket: &str,
-) -> anyhow::Result<()> {
-    let mut output = cfg
-        .s3
-        .get_object()
-        .bucket(bucket)
-        .key(key)
-        .send()
-        .await?;
-
-    let mut file = tokio::fs::File::create(dest).await?;
-    while let Some(chunk) = output.body.try_next().await? {
-        file.write_all(&chunk).await?;
-    }
-    file.flush().await?;
-    Ok(())
-}
-
-/// Upload a local file to S3_VIDEO_BUCKET using ByteStream::from_path.
-async fn upload_to_s3(cfg: &Config, src: &PathBuf, key: &str) -> anyhow::Result<()> {
-    let body = ByteStream::from_path(src).await?;
-    cfg.s3
-        .put_object()
-        .bucket(&cfg.video_bucket)
-        .key(key)
-        .content_type("video/mp4")
-        .body(body)
-        .send()
-        .await?;
-    Ok(())
-}
-
-/// Write a JSON value to videos/{id}/status.json in S3_VIDEO_BUCKET.
 async fn write_status(cfg: &Config, id: &str, body: serde_json::Value) -> anyhow::Result<()> {
-    let key = format!("videos/{}/status.json", id);
     let bytes = serde_json::to_vec(&body)?;
     cfg.s3
         .put_object()
         .bucket(&cfg.video_bucket)
-        .key(key)
+        .key(format!("videos/{}/status.json", id))
         .content_type("application/json")
         .body(ByteStream::from(bytes))
         .send()
         .await?;
     Ok(())
-}
-
-/// Run ffprobe to get the video stream height. Returns the height in pixels.
-async fn probe_height(path: &PathBuf) -> anyhow::Result<u32> {
-    let output = Command::new("ffprobe")
-        .args([
-            "-v", "error",
-            "-select_streams", "v:0",
-            "-show_entries", "stream=height",
-            "-of", "csv=p=0",
-            path.to_str().unwrap(),
-        ])
-        .output()
-        .await?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let height = stdout.trim().parse::<u32>()?;
-    Ok(height)
 }
