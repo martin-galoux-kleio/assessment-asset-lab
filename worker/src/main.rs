@@ -3,12 +3,13 @@
 //! Polls S3_RAW_BUCKET/queue/ every 30 seconds for pending jobs.
 //! For each job:
 //!   1. Claims it by deleting the queue marker.
-//!   2. Downloads the raw file from S3_RAW_BUCKET.
-//!   3. Transcodes to 360p / 720p / 1080p via FFmpeg.
-//!   4. Uploads renditions to S3_VIDEO_BUCKET.
+//!   2. Generates a presigned S3 URL — no download, no /tmp RAM usage.
+//!   3. Passes the URL directly to FFmpeg (HTTP Range-based streaming).
+//!   4. Uploads each rendition to S3_VIDEO_BUCKET.
 //!   5. Deletes raw file from S3_RAW_BUCKET.
 //!   6. Writes final status.json to S3_VIDEO_BUCKET.
 
+use aws_sdk_s3::presigning::PresigningConfig;
 use aws_sdk_s3::primitives::ByteStream;
 use serde_json::json;
 use std::path::PathBuf;
@@ -121,21 +122,29 @@ async fn process_video(cfg: &Config, id: &str) -> anyhow::Result<()> {
     // Mark as processing so the API can report it immediately.
     write_status(cfg, id, json!({ "status": "processing" })).await?;
 
-    // ── 1. Download raw file ──────────────────────────────────────────────────
-    let tmp_dir = std::env::temp_dir();
-    let raw_path = tmp_dir.join(format!("{}.orig", id));
+    // ── 1. Presign the raw S3 object — no download needed ────────────────────
+    // FFmpeg reads via HTTP Range requests, so the raw file never touches RAM.
+    let presign_cfg = PresigningConfig::expires_in(std::time::Duration::from_secs(7200))?;
+    let presigned = cfg
+        .s3
+        .get_object()
+        .bucket(&cfg.raw_bucket)
+        .key(format!("uploads/{}.orig", id))
+        .presigned(presign_cfg)
+        .await?;
+    let input_url = presigned.uri().to_string();
 
-    tracing::info!(id, path = %raw_path.display(), "downloading raw file");
-    download_from_s3(cfg, &format!("uploads/{}.orig", id), &raw_path, &cfg.raw_bucket).await?;
+    tracing::info!(id, "presigned input URL generated (no download)");
 
-    // ── 2. Probe source height ────────────────────────────────────────────────
-    let source_height = probe_height(&raw_path).await.unwrap_or_else(|e| {
+    // ── 2. Probe source height via the presigned URL ──────────────────────────
+    let source_height = probe_height(&input_url).await.unwrap_or_else(|e| {
         tracing::warn!(id, "ffprobe failed ({e}), assuming 720p");
         720
     });
     tracing::info!(id, source_height, "source probed");
 
     // ── 3. Transcode each rendition ───────────────────────────────────────────
+    let tmp_dir = std::env::temp_dir();
     let target_heights: &[u32] = &[360, 720, 1080];
     let mut produced: Vec<String> = Vec::new();
 
@@ -148,15 +157,25 @@ async fn process_video(cfg: &Config, id: &str) -> anyhow::Result<()> {
         let out_path = tmp_dir.join(format!("{}_{}.mp4", id, height));
         tracing::info!(id, height, "transcoding");
 
+        // The scale filter does two things:
+        //   1. scale=w=min(iw\,1920):h=-2  — cap input at 1920px wide first,
+        //      so FFmpeg never holds full 4K frames in RAM even for small outputs.
+        //   2. scale=-2:HEIGHT             — then scale to the target height.
+        // Both happen inside a single filter chain so only one decode pass occurs.
+        let vf = format!(
+            "scale=w='min(iw,1920)':h=-2,scale=-2:{}",
+            height
+        );
+
         let status = Command::new("ffmpeg")
             .args([
                 "-i",
-                raw_path.to_str().unwrap(),
+                &input_url,           // stream directly from S3, no local copy
                 "-c:v", "libx264",
                 "-crf", "22",
-                "-preset", "ultrafast", // lower RAM than "fast"
-                "-threads", "1",        // single thread — caps CPU + RAM spike
-                "-vf", &format!("scale=-2:{}", height),
+                "-preset", "ultrafast",
+                "-threads", "1",
+                "-vf", &vf,
                 "-c:a", "aac",
                 "-b:a", "128k",
                 "-movflags", "+faststart",
@@ -175,15 +194,13 @@ async fn process_video(cfg: &Config, id: &str) -> anyhow::Result<()> {
         tracing::info!(id, height, s3_key, "uploading rendition");
         upload_to_s3(cfg, &out_path, &s3_key).await?;
 
-        // Clean up local temp file immediately.
+        // Clean up local temp file immediately to free disk.
         let _ = tokio::fs::remove_file(&out_path).await;
 
         produced.push(format!("{}p", height));
     }
 
-    // ── 4. Clean up raw file ──────────────────────────────────────────────────
-    let _ = tokio::fs::remove_file(&raw_path).await;
-
+    // ── 4. Delete raw file from S3 ────────────────────────────────────────────
     cfg.s3
         .delete_object()
         .bucket(&cfg.raw_bucket)
@@ -202,30 +219,7 @@ async fn process_video(cfg: &Config, id: &str) -> anyhow::Result<()> {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/// Stream an S3 object to a local file.
-async fn download_from_s3(
-    cfg: &Config,
-    key: &str,
-    dest: &PathBuf,
-    bucket: &str,
-) -> anyhow::Result<()> {
-    let mut output = cfg
-        .s3
-        .get_object()
-        .bucket(bucket)
-        .key(key)
-        .send()
-        .await?;
-
-    let mut file = tokio::fs::File::create(dest).await?;
-    while let Some(chunk) = output.body.try_next().await? {
-        file.write_all(&chunk).await?;
-    }
-    file.flush().await?;
-    Ok(())
-}
-
-/// Upload a local file to S3_VIDEO_BUCKET using ByteStream::from_path.
+/// Upload a local file to S3_VIDEO_BUCKET.
 async fn upload_to_s3(cfg: &Config, src: &PathBuf, key: &str) -> anyhow::Result<()> {
     let body = ByteStream::from_path(src).await?;
     cfg.s3
@@ -254,15 +248,15 @@ async fn write_status(cfg: &Config, id: &str, body: serde_json::Value) -> anyhow
     Ok(())
 }
 
-/// Run ffprobe to get the video stream height. Returns the height in pixels.
-async fn probe_height(path: &PathBuf) -> anyhow::Result<u32> {
+/// Run ffprobe against a URL to get the video stream height in pixels.
+async fn probe_height(url: &str) -> anyhow::Result<u32> {
     let output = Command::new("ffprobe")
         .args([
             "-v", "error",
             "-select_streams", "v:0",
             "-show_entries", "stream=height",
             "-of", "csv=p=0",
-            path.to_str().unwrap(),
+            url,
         ])
         .output()
         .await?;
