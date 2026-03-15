@@ -150,18 +150,23 @@ async fn process_video(cfg: &Config, id: &str) -> anyhow::Result<()> {
 
         let status = Command::new("ffmpeg")
             .args([
-                "-fflags", "nobuffer",  // don't buffer input in RAM
+                "-fflags", "nobuffer",
                 "-i",
                 raw_path.to_str().unwrap(),
                 "-c:v", "libx264",
                 "-crf", "23",
                 "-preset", "ultrafast",
                 "-threads", "1",
-                "-vf", &format!("scale=-2:{}", height),
+                // scale + tonemap 10-bit HDR → 8-bit SDR for browser compatibility
+                "-vf", &format!(
+                    "scale=-2:{},zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p",
+                    height
+                ),
+                "-pix_fmt", "yuv420p",  // force 8-bit output — required for browser playback
                 "-c:a", "aac",
                 "-b:a", "128k",
-                "-bufsize", "512k",     // cap output buffer size
-                "-maxrate", "2M",       // cap peak bitrate to bound encoder RAM
+                "-bufsize", "512k",
+                "-maxrate", "2M",
                 "-movflags", "+faststart",
                 "-y",
                 out_path.to_str().unwrap(),
