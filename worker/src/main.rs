@@ -45,21 +45,14 @@ async fn main() {
         .load()
         .await;
 
-    // Discover the account-specific MediaConvert endpoint automatically.
-    // This avoids needing a MEDIACONVERT_ENDPOINT env var.
-    let discovery_client = aws_sdk_mediaconvert::Client::new(&aws_config);
-    let mediaconvert_endpoint = discovery_client
-        .describe_endpoints()
-        .send()
-        .await
-        .expect("failed to describe MediaConvert endpoints")
-        .endpoints()
-        .first()
-        .and_then(|e| e.url())
-        .expect("no MediaConvert endpoint returned")
-        .to_string();
+    // Build the regional MediaConvert endpoint directly.
+    // The describe_endpoints API is deprecated; the SDK now recommends using
+    // the standard regional endpoint: https://mediaconvert.<region>.amazonaws.com
+    let region_str = std::env::var("AWS_DEFAULT_REGION")
+        .unwrap_or_else(|_| "eu-west-3".to_string());
+    let mediaconvert_endpoint = format!("https://mediaconvert.{}.amazonaws.com", region_str);
 
-    tracing::info!(mediaconvert_endpoint, "discovered MediaConvert endpoint");
+    tracing::info!(mediaconvert_endpoint, "using MediaConvert regional endpoint");
 
     let mc_config = aws_sdk_mediaconvert::config::Builder::from(&aws_config)
         .endpoint_url(&mediaconvert_endpoint)
@@ -193,7 +186,7 @@ async fn process_video(cfg: &Config, id: &str) -> anyhow::Result<()> {
                             .aac_settings(
                                 AacSettings::builder()
                                     .sample_rate(48000)
-                                    .bitrate(128000_f64)
+                                    .bitrate(128000_i32)
                                     .coding_mode(AacCodingMode::CodingMode20)
                                     .build(),
                             )
