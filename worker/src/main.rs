@@ -150,15 +150,18 @@ async fn process_video(cfg: &Config, id: &str) -> anyhow::Result<()> {
 
         let status = Command::new("ffmpeg")
             .args([
+                "-fflags", "nobuffer",  // don't buffer input in RAM
                 "-i",
                 raw_path.to_str().unwrap(),
                 "-c:v", "libx264",
-                "-crf", "22",
-                "-preset", "ultrafast", // lower RAM than "fast"
-                "-threads", "1",        // single thread — caps CPU + RAM spike
+                "-crf", "23",
+                "-preset", "ultrafast",
+                "-threads", "1",
                 "-vf", &format!("scale=-2:{}", height),
                 "-c:a", "aac",
                 "-b:a", "128k",
+                "-bufsize", "512k",     // cap output buffer size
+                "-maxrate", "2M",       // cap peak bitrate to bound encoder RAM
                 "-movflags", "+faststart",
                 "-y",
                 out_path.to_str().unwrap(),
