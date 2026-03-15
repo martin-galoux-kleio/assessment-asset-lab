@@ -10,7 +10,6 @@
 //!   6. Writes final status.json to S3_VIDEO_BUCKET.
 
 use aws_sdk_s3::primitives::ByteStream;
-use futures::TryStreamExt;
 use serde_json::json;
 use std::path::PathBuf;
 use tokio::io::AsyncWriteExt;
@@ -155,7 +154,8 @@ async fn process_video(cfg: &Config, id: &str) -> anyhow::Result<()> {
                 raw_path.to_str().unwrap(),
                 "-c:v", "libx264",
                 "-crf", "22",
-                "-preset", "fast",
+                "-preset", "ultrafast", // lower RAM than "fast"
+                "-threads", "1",        // single thread — caps CPU + RAM spike
                 "-vf", &format!("scale=-2:{}", height),
                 "-c:a", "aac",
                 "-b:a", "128k",
