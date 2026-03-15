@@ -2,6 +2,19 @@
 
 Upload videos (up to 1 GB, e.g. MP4, WebM, MOV) and watch them by ID. The frontend provides an upload page and a watch page; the backend stores raw uploads in S3 and serves presigned URLs; a separate worker transcodes videos into multiple qualities (360p, 720p, 1080p) and writes them to a second S3 bucket.
 
+## Screenshots
+
+**Upload** — drag & drop, progress, then get a watch link.
+
+![Upload page](screenshots/Screenshot%202026-03-15%20at%2012.47.58.png)
+
+**Watch** — play by ID; when transcoding is done, pick a quality (360p / 720p / 1080p).
+
+![Watch page](screenshots/Screenshot%202026-03-15%20at%2015.07.14.png)
+![Watch — quality selector](screenshots/Screenshot%202026-03-15%20at%2015.07.23.png)
+![Watch — quality selector](screenshots/Screenshot%202026-03-15%20at%2015.07.27.png)
+![Watch — quality selector](screenshots/Screenshot%202026-03-15%20at%2015.07.38.png)
+
 ## Architecture
 
 ![High-level architecture diagram](docs/architecture.png)
