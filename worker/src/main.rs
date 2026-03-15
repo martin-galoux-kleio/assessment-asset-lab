@@ -121,8 +121,9 @@ async fn poll_and_process(cfg: &Config) -> anyhow::Result<()> {
             .await?;
 
         if let Err(e) = process_video(cfg, &id).await {
-            tracing::error!(id, "job failed: {e}");
-            let _ = write_status(cfg, &id, json!({ "status": "error", "error": e.to_string() })).await;
+            // Use {e:#} to print the full anyhow error chain (includes SDK cause/code).
+            tracing::error!(id, "job failed: {e:#}");
+            let _ = write_status(cfg, &id, json!({ "status": "error", "error": format!("{e:#}") })).await;
         }
     }
 
