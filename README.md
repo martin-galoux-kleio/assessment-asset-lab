@@ -4,6 +4,8 @@ Upload videos (up to 1 GB, e.g. MP4, WebM, MOV) and watch them by ID. The fronte
 
 ## Architecture
 
+![High-level architecture diagram](docs/architecture.png)
+
 ### Functional requirements
 
 - **Upload video** — User can upload a single video file (max 1 GB; formats such as MP4, WebM, MOV). Upload is protected by a Bearer token. The backend returns a video ID used for playback.
